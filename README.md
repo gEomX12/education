@@ -71,6 +71,44 @@ cargo test --workspace --locked
 
 Оригинальный Token Program остается рабочим и широко используется. Для новых токенов в учебных заданиях используйте Token-2022, а program-код пишите через `token_interface`, чтобы сохранить совместимость с обоими Token Program.
 
+## Задание 1 — что сделано в этой ветке
+
+Ветка `task/01-tests` расширяет LiteSVM-тесты в `programs/solana-level-1-token-starter/tests/create_token.rs`.
+
+### Версии
+
+- Anchor CLI и crates: `1.1.2`
+- Solana CLI (Agave): `3.1.10`
+- Rust: `1.89.0` (platform-tools `v1.52` для SBF)
+- LiteSVM: `0.10.0`
+- токены: Token-2022 через `anchor_spl::token_interface`
+
+На WSL `anchor build` может падать из‑за бага rustup (`invalid custom toolchain name: '1.89.0-sbpf-solana-v1.52'`). Обход: собрать программу через `cargo-build-sbf --no-rustup-override` rustc из platform-tools, без `+solana` toolchain.
+
+### Команды
+
+```bash
+export PATH="$HOME/.cache/solana/v1.52/platform-tools/rust/bin:$HOME/solana-release/bin:$PATH"
+export RUSTC="$HOME/.cache/solana/v1.52/platform-tools/rust/bin/rustc"
+cargo-build-sbf --no-rustup-override \
+  --manifest-path programs/solana-level-1-token-starter/Cargo.toml \
+  --sbf-out-dir target/deploy
+
+unset RUSTC
+cargo test --workspace --locked
+```
+
+Ожидаемый результат: `test_id`, `test_token_lifecycle_end_to_end` и `test_negative_scenarios_failures` — `ok`. Тесты читают `target/deploy/solana_level_1_token_starter.so`.
+
+### Тесты
+
+- `test_token_lifecycle_end_to_end` — create mint (decimals, supply 0, mint authority, owner Token-2022), create ATA Alice/Bob (owner token program, mint, owner аккаунта), mint (баланс получателя и supply), transfer_checked (оба баланса, supply не меняется).
+- `test_negative_scenarios_failures` — нулевая сумма mint/transfer, чужой authority, чужой mint, одинаковые source/destination; после ошибки supply и балансы не меняются.
+
+### Архитектура теста
+
+Тест собирает Anchor-инструкции (`CreateToken`, `CreateTokenAccount`, `MintTokens`, `TransferTokens`) и гоняет их в LiteSVM. ATA считаются через `get_associated_token_address_with_program_id` для Token-2022. Состояние mint и token account проверяется через `StateWithExtensions`.
+
 ## Что уже реализовано
 
 - создание mint с выбранной token-программой;
@@ -78,7 +116,7 @@ cargo test --workspace --locked
 - выпуск токенов через `mint_to`;
 - перевод через `transfer_checked`;
 - проверки положительной суммы, полномочий, mint и token program на уровне Anchor accounts constraints;
-- один эталонный LiteSVM-тест создания Token-2022 mint.
+- LiteSVM-тесты полного цикла Token-2022 (create / ATA / mint / transfer) и негативные сценарии.
 
 Функции `burn_tokens` и Escrow намеренно отсутствуют: студент реализует их в следующих заданиях.
 
