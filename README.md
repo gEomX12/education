@@ -56,7 +56,7 @@ cargo test --workspace --locked
 
 Не публикуйте keypair, seed phrase, приватные ключи или `.env` с секретами.
 
-Следующие задания выполняются в ветках `task/02-burn` и `task/03-escrow`. Реализация `burn_tokens` описана ниже; Escrow выдаётся на учебной платформе.
+Следующие задания выполняются в ветках `task/02-burn` и `task/03-escrow`. Реализация `burn_tokens` и escrow описана ниже.
 
 ## Зафиксированный стек
 
@@ -154,6 +154,87 @@ LiteSVM — in-process Solana VM: тест загружает `.so`, шлёт An
 
 Так проверка идёт по ончейн-состоянию в SVM, а не по ответу CPI.
 
+## Задание 3 — escrow
+
+Ветка `task/03-escrow` добавляет программу `programs/escrow`: уникальная PDA-сделка, vault на Token-2022 и четыре инструкции с закрытием аккаунтов.
+
+### Архитектура
+
+Два аккаунта на сделку:
+
+- **EscrowState** (PDA программы) — метаданные: `sender`, `receiver`, `mint`, `amount`, `deal_id`, `bump`, `status`.
+- **Vault** — ATA Token-2022, authority = PDA. Не общий пул: один vault на одну сделку.
+
+Сиды PDA:
+
+```text
+[b"escrow", sender.key().as_ref(), deal_id.to_le_bytes().as_ref()]
+```
+
+Один и тот же `deal_id` у другого `sender` даёт другой адрес. Повторный `initialize` с той же парой `(sender, deal_id)` падает на `init`.
+
+| Инструкция | Signer | Эффект |
+|---|---|---|
+| `initialize(deal_id, amount)` | sender | создаёт PDA + vault, статус `Created` |
+| `deposit(deal_id)` | sender | `transfer_checked` ровно `amount` в vault → `Funded` |
+| `release(deal_id)` | **только sender** | токены на ATA получателя, close vault и PDA, рента sender |
+| `cancel(deal_id)` | sender | из `Created`/`Funded` (возврат токенов если funded), close, рента sender |
+
+Token program только Token-2022 (`token_interface` + `TOKEN_2022_PROGRAM_ID`). Переводы — `transfer_checked` с decimals из mint. `init_if_needed` не используется.
+
+### Конечный автомат
+
+```text
+Created  --deposit-->  Funded  --release-->  Released  --> аккаунты закрыты
+   |                     |
+   +-------cancel--------+------>  Cancelled  --> аккаунты закрыты
+```
+
+Недопустимые переходы (`deposit` повторно, `release` не из `Funded`, `cancel` после close) отклоняются кодами `AlreadyProcessed` / `InvalidStatus` или отсутствием аккаунта.
+
+### Модель угроз
+
+| Угроза | Защита в программе |
+|---|---|
+| Чужой вызывает `release` / `deposit` / `cancel` | `sender: Signer` + PDA seeds от `sender` + `has_one = sender` |
+| Подмена receiver при `release` | `has_one = receiver`; токены только на ATA с `token::authority = receiver` |
+| Нулевая сумма | `require!(amount > 0)` на `initialize` |
+| Повторный `deal_id` у того же sender | `init` PDA; аккаунт уже существует |
+| Повторный `deposit` / `release` / `cancel` | статус + закрытие vault/`EscrowState` |
+| Другой mint или Token Program | `has_one = mint`, `token::mint`, `token_program == TOKEN_2022` |
+| Недостаточный баланс | CPI `transfer_checked` не проходит; статус остаётся `Created` |
+| Общий vault / перепутанные сделки | vault = ATA от уникальной PDA, не shared pool |
+| Кража ренты | `close = sender` и `close_account` destination = sender |
+
+Клиентские проверки не заменяют эти constraints.
+
+### Команды сборки и тестов
+
+```bash
+export PATH="$HOME/.local/bin:$HOME/.cache/solana/v1.52/platform-tools/rust/bin:$HOME/solana-release/bin:$PATH"
+export RUSTC="$HOME/.cache/solana/v1.52/platform-tools/rust/bin/rustc"
+cargo-build-sbf --no-rustup-override \
+  --manifest-path programs/escrow/Cargo.toml \
+  --sbf-out-dir target/deploy
+cargo-build-sbf --no-rustup-override \
+  --manifest-path programs/solana-level-1-token-starter/Cargo.toml \
+  --sbf-out-dir target/deploy
+unset RUSTC
+
+cargo test -p escrow --test escrow
+```
+
+Или после `anchor build --ignore-keys`:
+
+```bash
+cargo test --workspace --locked
+cargo test -p escrow --test escrow -- --nocapture
+```
+
+Ожидаемый результат: позитивные `initialize → deposit → release` / `cancel` и негативные (нулевая сумма, replay, подмена сторон, недостаточный баланс, повторный `deal_id`) — `ok`. Тесты в `programs/escrow/tests/escrow.rs` читают оба `.so` и проверяют балансы ATA, закрытие аккаунтов и возврат ренты sender через `svm.get_account`.
+
+На WSL при ошибке rustup используйте сборку `cargo-build-sbf --no-rustup-override` из раздела задания 1.
+
 ## Что уже реализовано
 
 - создание mint с выбранной token-программой;
@@ -162,9 +243,8 @@ LiteSVM — in-process Solana VM: тест загружает `.so`, шлёт An
 - перевод через `transfer_checked`;
 - сжигание через `burn_checked` (`burn_tokens`);
 - проверки положительной суммы, полномочий, mint и token program на уровне Anchor accounts constraints;
-- LiteSVM-тесты полного цикла Token-2022 (create / ATA / mint / transfer / burn) и негативные сценарии.
-
-Escrow в следующих заданиях: отдельная ветка `task/03-escrow`.
+- LiteSVM-тесты полного цикла Token-2022 (create / ATA / mint / transfer / burn) и негативные сценарии;
+- escrow: PDA-сделка, vault ATA, `initialize` / `deposit` / `release` / `cancel`.
 
 ## Быстрый старт
 
@@ -173,7 +253,7 @@ Escrow в следующих заданиях: отдельная ветка `ta
 3. После первой сборки выполните `cargo test --workspace --locked`.
 4. Разрабатывайте каждое задание в отдельной ветке: `task/01-tests`, `task/02-burn`, `task/03-escrow`.
 
-Тест загружает собранный файл `target/deploy/solana_level_1_token_starter.so`, поэтому перед первым `cargo test` нужен `anchor build --ignore-keys`.
+Тесты загружают `target/deploy/solana_level_1_token_starter.so` и `target/deploy/escrow.so`, поэтому перед первым `cargo test` нужна сборка обеих программ.
 
 ## Правила сдачи
 

@@ -8,6 +8,7 @@ skip-lint = false
 
 [programs.localnet]
 solana_level_1_token_starter = "56ak38Zzznbe9cV3pkGBgSYWjLPRT74Aa9za4Bry1ATx"
+escrow = "FNz31K54MxJkxd2dUXuHgCs2KyjW2BtDZ8WkcnT6ExuR"
 
 [provider]
 cluster = "localnet"
