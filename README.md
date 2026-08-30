@@ -56,7 +56,7 @@ cargo test --workspace --locked
 
 Не публикуйте keypair, seed phrase, приватные ключи или `.env` с секретами.
 
-Следующие задания выполняются в ветках `task/02-burn` и `task/03-escrow`. Их условия выдаются на учебной платформе; готовой реализации в starter нет.
+Следующие задания выполняются в ветках `task/02-burn` и `task/03-escrow`. Реализация `burn_tokens` описана ниже; Escrow выдаётся на учебной платформе.
 
 ## Зафиксированный стек
 
@@ -98,7 +98,7 @@ unset RUSTC
 cargo test --workspace --locked
 ```
 
-Ожидаемый результат: `test_id`, `test_token_lifecycle_end_to_end` и `test_negative_scenarios_failures` — `ok`. Тесты читают `target/deploy/solana_level_1_token_starter.so`.
+Ожидаемый результат: `test_id`, `test_token_lifecycle_end_to_end`, `test_negative_scenarios_failures` и `test_burn_tokens_reduces_balance` — `ok`. Тесты читают `target/deploy/solana_level_1_token_starter.so`. Отдельный запуск файла тестов: `cargo test --test create_token`.
 
 ### Тесты
 
@@ -109,16 +109,62 @@ cargo test --workspace --locked
 
 Тест собирает Anchor-инструкции (`CreateToken`, `CreateTokenAccount`, `MintTokens`, `TransferTokens`) и гоняет их в LiteSVM. ATA считаются через `get_associated_token_address_with_program_id` для Token-2022. Состояние mint и token account проверяется через `StateWithExtensions`.
 
+## Задание 2 — сжигание токенов (`burn_tokens`)
+
+Ветка `task/02-burn` добавляет инструкцию `burn_tokens` и LiteSVM-тест, который проверяет уменьшение баланса ATA и mint supply.
+
+### Что сделано
+
+- Инструкция `burn_tokens` в `programs/solana-level-1-token-starter/src/instructions/burn.rs`: CPI `burn_checked` через `token_interface`.
+- Проверки: `amount > 0`, `token_account.mint == mint`, `token_account.owner == authority`; authority должен подписать транзакцию.
+- Тест `test_burn_tokens_reduces_balance`: создаёт mint, ATA Alice, минтит `1_000_000`, сжигает `400_000` (подписывает Alice как владелец ATA), затем проверяет баланс и supply `600_000`.
+
+### Команды
+
+Сначала соберите программу (тесты читают `target/deploy/solana_level_1_token_starter.so`):
+
+```bash
+export PATH="$HOME/.local/bin:$HOME/.cache/solana/v1.52/platform-tools/rust/bin:$HOME/solana-release/bin:$PATH"
+anchor build --ignore-keys
+```
+
+Запуск всех тестов файла `create_token`:
+
+```bash
+cargo test --test create_token
+```
+
+Только burn-сценарий:
+
+```bash
+cargo test --test create_token test_burn_tokens_reduces_balance -- --nocapture
+```
+
+Ожидаемый результат: `test_token_lifecycle_end_to_end`, `test_negative_scenarios_failures` и `test_burn_tokens_reduces_balance` — `ok`.
+
+На WSL, если `anchor build` падает из‑за rustup, используйте сборку из раздела «Задание 1 — что сделано в этой ветке».
+
+### Как LiteSVM проверяет балансы
+
+LiteSVM — in-process Solana VM: тест загружает `.so`, шлёт Anchor-инструкции через `Transaction` и читает аккаунты из памяти SVM, без RPC и локального validator.
+
+1. `svm.get_account(pubkey)` возвращает сырые данные mint или token account после `send()`.
+2. `unpack_mint` / `unpack_token` разбирают их через `StateWithExtensions` (Token-2022): у mint берутся `decimals`, `supply`, `mint_authority`; у ATA — `mint`, `owner`, `amount`.
+3. После mint тест сравнивает `amount` ATA и `supply` mint с `1_000_000`. После `burn_tokens` оба значения должны стать `1_000_000 - 400_000`. Transfer уменьшает один ATA и увеличивает другой, не меняя supply; burn уменьшает и баланс, и supply.
+
+Так проверка идёт по ончейн-состоянию в SVM, а не по ответу CPI.
+
 ## Что уже реализовано
 
 - создание mint с выбранной token-программой;
 - создание associated token account;
 - выпуск токенов через `mint_to`;
 - перевод через `transfer_checked`;
+- сжигание через `burn_checked` (`burn_tokens`);
 - проверки положительной суммы, полномочий, mint и token program на уровне Anchor accounts constraints;
-- LiteSVM-тесты полного цикла Token-2022 (create / ATA / mint / transfer) и негативные сценарии.
+- LiteSVM-тесты полного цикла Token-2022 (create / ATA / mint / transfer / burn) и негативные сценарии.
 
-Функции `burn_tokens` и Escrow намеренно отсутствуют: студент реализует их в следующих заданиях.
+Escrow в следующих заданиях: отдельная ветка `task/03-escrow`.
 
 ## Быстрый старт
 
