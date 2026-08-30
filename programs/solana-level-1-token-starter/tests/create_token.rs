@@ -9,6 +9,7 @@ use std::{fs, path::PathBuf};
 const DECIMALS: u8 = 6;
 const MINT_AMOUNT: u64 = 1_000_000;
 const TRANSFER_AMOUNT: u64 = 250_000;
+const BURN_AMOUNT: u64 = 400_000;
 
 fn program_bytes() -> Vec<u8> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -157,6 +158,26 @@ fn transfer_tokens_ix(
             token_program,
         }),
         data: solana_level_1_token_starter::instruction::TransferTokens { amount }.data(),
+    }
+}
+
+fn burn_tokens_ix(
+    program_id: solana_keypair::Address,
+    token_program: solana_keypair::Address,
+    authority: &solana_keypair::Address,
+    mint: &solana_keypair::Address,
+    token_account: &solana_keypair::Address,
+    amount: u64,
+) -> Instruction {
+    Instruction {
+        program_id,
+        accounts: metas(solana_level_1_token_starter::accounts::BurnTokens {
+            token_account: *token_account,
+            mint: *mint,
+            authority: *authority,
+            token_program,
+        }),
+        data: solana_level_1_token_starter::instruction::BurnTokens { amount }.data(),
     }
 }
 
@@ -566,4 +587,77 @@ fn test_negative_scenarios_failures() {
     assert_eq!(unpack_mint(&h.svm, &h.mint.pubkey()).1, snapshot_supply);
     assert_eq!(unpack_token(&h.svm, &h.alice_ata).2, snapshot_alice);
     assert_eq!(unpack_token(&h.svm, &h.bob_ata).2, snapshot_bob);
+}
+
+#[test]
+fn test_burn_tokens_reduces_balance() {
+    let mut h = setup();
+
+    send(
+        &mut h.svm,
+        &h.payer,
+        &[&h.authority, &h.mint],
+        create_token_ix(
+            h.program_id,
+            h.token_program,
+            &h.payer.pubkey(),
+            &h.authority.pubkey(),
+            &h.mint.pubkey(),
+        ),
+    )
+    .expect("create_token failed");
+    send(
+        &mut h.svm,
+        &h.payer,
+        &[],
+        create_token_account_ix(
+            h.program_id,
+            h.token_program,
+            &h.payer.pubkey(),
+            &h.alice.pubkey(),
+            &h.mint.pubkey(),
+        ),
+    )
+    .expect("create alice ata failed");
+    send(
+        &mut h.svm,
+        &h.payer,
+        &[&h.authority],
+        mint_tokens_ix(
+            h.program_id,
+            h.token_program,
+            &h.authority.pubkey(),
+            &h.mint.pubkey(),
+            &h.alice_ata,
+            MINT_AMOUNT,
+        ),
+    )
+    .expect("mint_tokens failed");
+
+    assert_eq!(unpack_token(&h.svm, &h.alice_ata).2, MINT_AMOUNT);
+    assert_eq!(unpack_mint(&h.svm, &h.mint.pubkey()).1, MINT_AMOUNT);
+
+    send(
+        &mut h.svm,
+        &h.payer,
+        &[&h.alice],
+        burn_tokens_ix(
+            h.program_id,
+            h.token_program,
+            &h.alice.pubkey(),
+            &h.mint.pubkey(),
+            &h.alice_ata,
+            BURN_AMOUNT,
+        ),
+    )
+    .expect("burn_tokens failed");
+
+    assert_eq!(
+        unpack_token(&h.svm, &h.alice_ata).2,
+        MINT_AMOUNT - BURN_AMOUNT
+    );
+    assert_eq!(
+        unpack_mint(&h.svm, &h.mint.pubkey()).1,
+        MINT_AMOUNT - BURN_AMOUNT
+    );
 }
